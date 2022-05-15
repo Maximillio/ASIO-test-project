@@ -1,206 +1,90 @@
-#include <array>
-#include <cstdlib>
+//
+// http_client.cpp
+// ~~~~~~~~~~~~~~~
+//
+// Copyright (c) 2003-2022 Christopher M. Kohlhoff (chris at kohlhoff dot com)
+//
+// Distributed under the Boost Software License, Version 1.0. (See accompanying
+// file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
+//
+
 #include <iostream>
-#include <memory>
-#include <type_traits>
-#include <utility>
-#include "ASIO/asio.hpp"
+#include <istream>
+#include <ostream>
+#include <string>
+#include <ASIO/asio.hpp>
 
 using asio::ip::tcp;
-
-// Class to manage the memory to be used for handler-based custom allocation.
-// It contains a single block of memory which may be returned for allocation
-// requests. If the memory is in use when an allocation request is made, the
-// allocator delegates allocation to the global heap.
-class handler_memory
-{
-public:
-  handler_memory()
-    : in_use_(false)
-  {
-  }
-
-  handler_memory(const handler_memory&) = delete;
-  handler_memory& operator=(const handler_memory&) = delete;
-
-  void* allocate(std::size_t size)
-  {
-    if (!in_use_ && size < sizeof(storage_))
-    {
-      in_use_ = true;
-      return &storage_;
-    }
-    else
-    {
-      return ::operator new(size);
-    }
-  }
-
-  void deallocate(void* pointer)
-  {
-    if (pointer == &storage_)
-    {
-      in_use_ = false;
-    }
-    else
-    {
-      ::operator delete(pointer);
-    }
-  }
-
-private:
-  // Storage space used for handler-based custom memory allocation.
-  typename std::aligned_storage<1024>::type storage_;
-
-  // Whether the handler-based custom allocation storage has been used.
-  bool in_use_;
-};
-
-// The allocator to be associated with the handler objects. This allocator only
-// needs to satisfy the C++11 minimal allocator requirements.
-template <typename T>
-class handler_allocator
-{
-public:
-  using value_type = T;
-
-  explicit handler_allocator(handler_memory& mem)
-    : memory_(mem)
-  {
-  }
-
-  template <typename U>
-  handler_allocator(const handler_allocator<U>& other) noexcept
-    : memory_(other.memory_)
-  {
-  }
-
-  bool operator==(const handler_allocator& other) const noexcept
-  {
-    return &memory_ == &other.memory_;
-  }
-
-  bool operator!=(const handler_allocator& other) const noexcept
-  {
-    return &memory_ != &other.memory_;
-  }
-
-  T* allocate(std::size_t n) const
-  {
-    return static_cast<T*>(memory_.allocate(sizeof(T) * n));
-  }
-
-  void deallocate(T* p, std::size_t /*n*/) const
-  {
-    return memory_.deallocate(p);
-  }
-
-private:
-  template <typename> friend class handler_allocator;
-
-  // The underlying memory.
-  handler_memory& memory_;
-};
-
-class session
-  : public std::enable_shared_from_this<session>
-{
-public:
-  session(tcp::socket socket)
-    : socket_(std::move(socket))
-  {
-  }
-
-  void start()
-  {
-    do_read();
-  }
-
-private:
-  void do_read()
-  {
-    auto self(shared_from_this());
-    socket_.async_read_some(asio::buffer(data_),
-        asio::bind_allocator(
-          handler_allocator<int>(handler_memory_),
-          [this, self](std::error_code ec, std::size_t length)
-          {
-            if (!ec)
-            {
-              do_write(length);
-            }
-          }));
-  }
-
-  void do_write(std::size_t length)
-  {
-    auto self(shared_from_this());
-    asio::async_write(socket_, asio::buffer(data_, length),
-        asio::bind_allocator(
-          handler_allocator<int>(handler_memory_),
-          [this, self](std::error_code ec, std::size_t /*length*/)
-          {
-            if (!ec)
-            {
-              do_read();
-            }
-          }));
-  }
-
-  // The socket used to communicate with the client.
-  tcp::socket socket_;
-
-  // Buffer used to store data received from the client.
-  std::array<char, 1024> data_;
-
-  // The memory to use for handler-based custom memory allocation.
-  handler_memory handler_memory_;
-};
-
-class server
-{
-public:
-  server(asio::io_context& io_context, short port)
-    : acceptor_(io_context, tcp::endpoint(tcp::v4(), port))
-  {
-    do_accept();
-  }
-
-private:
-  void do_accept()
-  {
-    acceptor_.async_accept(
-        [this](std::error_code ec, tcp::socket socket)
-        {
-          if (!ec)
-          {
-            std::make_shared<session>(std::move(socket))->start();
-          }
-
-          do_accept();
-        });
-  }
-
-  tcp::acceptor acceptor_;
-};
 
 int main(int argc, char* argv[])
 {
   try
   {
-    if (argc != 2)
+    if (argc != 3)
     {
-      std::cerr << "Usage: server <port>\n";
+      std::cout << "Usage: http_client <server> <path>\n";
+      std::cout << "Example:\n";
+      std::cout << "  http_client www.boost.org /LICENSE_1_0.txt\n";
       return 1;
     }
 
-    asio::io_context io_context;
-    server s(io_context, std::atoi(argv[1]));
-    io_context.run();
+    asio::ip::tcp::iostream s;
+
+    // The entire sequence of I/O operations must complete within 60 seconds.
+    // If an expiry occurs, the socket is automatically closed and the stream
+    // becomes bad.
+    s.expires_after(std::chrono::seconds(60));
+
+    // Establish a connection to the server.
+    s.connect(argv[1], "http");
+    if (!s)
+    {
+      std::cout << "Unable to connect: " << s.error().message() << "\n";
+      return 1;
+    }
+
+    // Send the request. We specify the "Connection: close" header so that the
+    // server will close the socket after transmitting the response. This will
+    // allow us to treat all data up until the EOF as the content.
+    s << "GET " << argv[2] << " HTTP/1.0\r\n";
+    s << "Host: " << argv[1] << "\r\n";
+    s << "Accept: */*\r\n";
+    s << "Connection: close\r\n\r\n";
+
+    // By default, the stream is tied with itself. This means that the stream
+    // automatically flush the buffered output before attempting a read. It is
+    // not necessary not explicitly flush the stream at this point.
+
+    // Check that response is OK.
+    std::string http_version;
+    s >> http_version;
+    unsigned int status_code;
+    s >> status_code;
+    std::string status_message;
+    std::getline(s, status_message);
+    if (!s || http_version.substr(0, 5) != "HTTP/")
+    {
+      std::cout << "Invalid response\n";
+      return 1;
+    }
+    if (status_code != 200)
+    {
+      std::cout << "Response returned with status code " << status_code << "\n";
+      return 1;
+    }
+
+    // Process the response headers, which are terminated by a blank line.
+    std::string header;
+    while (std::getline(s, header) && header != "\r")
+      std::cout << header << "\n";
+    std::cout << "\n";
+
+    // Write the remaining data to output.
+    std::cout << s.rdbuf();
   }
   catch (std::exception& e)
   {
-    std::cerr << "Exception: " << e.what() << "\n";
+    std::cout << "Exception: " << e.what() << "\n";
   }
 
   return 0;
