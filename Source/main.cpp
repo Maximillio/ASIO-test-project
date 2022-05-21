@@ -9,83 +9,62 @@
 //
 
 #include <iostream>
-#include <istream>
-#include <ostream>
 #include <string>
 #include <ASIO/asio.hpp>
+#include <functional>
 
-using asio::ip::tcp;
+struct functor
+{
+    asio::steady_timer* timer;
+    int* count;
+    void operator()(const asio::error_code& e)
+    {
+        std::cout << "Hello, world #" << *count <<"!" << std::endl;
+        std::cout << "The error code is:" << e << std::endl;
+        if ((*count) < 6)
+        {
+            ++(*count);
+            timer->expires_at(timer->expiry() + std::chrono::seconds(5));
+            timer->async_wait(*this);
+        }
+    }
+};
+
+void print(const asio::error_code& e, asio::steady_timer& timer, int& count)
+{
+    std::cout << "Hello, world #" << count <<"!" << std::endl;
+    std::cout << "The error code is:" << e << std::endl;
+    ++count;
+    if (count < 6)
+    {
+        timer.expires_at(timer.expiry() + std::chrono::seconds(5));
+    }
+}
+
+void print_2(const asio::error_code& e)
+{
+    std::cout << "Another Hello, world!" << std::endl;
+    std::cout << "The error code is:" << e << std::endl;
+}
 
 int main(int argc, char* argv[])
 {
-  try
-  {
-    if (argc != 3)
-    {
-      std::cout << "Usage: http_client <server> <path>\n";
-      std::cout << "Example:\n";
-      std::cout << "  http_client www.boost.org /LICENSE_1_0.txt\n";
-      return 1;
-    }
+    asio::io_context io;
+    int count {};
 
-    asio::ip::tcp::iostream s;
+    asio::steady_timer t(io, asio::chrono::seconds(5));
+    asio::steady_timer ti(io, asio::chrono::seconds(3));
 
-    // The entire sequence of I/O operations must complete within 60 seconds.
-    // If an expiry occurs, the socket is automatically closed and the stream
-    // becomes bad.
-    s.expires_after(std::chrono::seconds(60));
+    functor func;
+    func.count = &count;
+    func.timer = &t;
 
-    // Establish a connection to the server.
-    s.connect(argv[1], "http");
-    if (!s)
-    {
-      std::cout << "Unable to connect: " << s.error().message() << "\n";
-      return 1;
-    }
+    t.async_wait(func);
+    ti.async_wait(&print_2);
 
-    // Send the request. We specify the "Connection: close" header so that the
-    // server will close the socket after transmitting the response. This will
-    // allow us to treat all data up until the EOF as the content.
-    s << "GET " << argv[2] << " HTTP/1.0\r\n";
-    s << "Host: " << argv[1] << "\r\n";
-    s << "Accept: */*\r\n";
-    s << "Connection: close\r\n\r\n";
+    io.run();
 
-    // By default, the stream is tied with itself. This means that the stream
-    // automatically flush the buffered output before attempting a read. It is
-    // not necessary not explicitly flush the stream at this point.
+    std::cout << "Hello, after world!" << std::endl;
 
-    // Check that response is OK.
-    std::string http_version;
-    s >> http_version;
-    unsigned int status_code;
-    s >> status_code;
-    std::string status_message;
-    std::getline(s, status_message);
-    if (!s || http_version.substr(0, 5) != "HTTP/")
-    {
-      std::cout << "Invalid response\n";
-      return 1;
-    }
-    if (status_code != 200)
-    {
-      std::cout << "Response returned with status code " << status_code << "\n";
-      return 1;
-    }
-
-    // Process the response headers, which are terminated by a blank line.
-    std::string header;
-    while (std::getline(s, header) && header != "\r")
-      std::cout << header << "\n";
-    std::cout << "\n";
-
-    // Write the remaining data to output.
-    std::cout << s.rdbuf();
-  }
-  catch (std::exception& e)
-  {
-    std::cout << "Exception: " << e.what() << "\n";
-  }
-
-  return 0;
+    return 0;
 }
