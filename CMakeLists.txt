@@ -4,8 +4,16 @@ set(PROJECT_NAME ASIO_test_project)
 
 project(${PROJECT_NAME})
 
-FILE(GLOB FILES Source/*.cpp)
+set(FIRST_EXEC Client)
+set(SECOND_EXEC Server)
 
-add_executable(${PROJECT_NAME} ${FILES})
+set(FILES Source/main.cpp)
+set(FILES_ADD Source/main_add.cpp)
 
-target_include_directories(${PROJECT_NAME} PRIVATE "Include/")
+add_executable(${FIRST_EXEC} ${FILES})
+
+target_include_directories(${FIRST_EXEC} PRIVATE "Include/")
+
+add_executable(${SECOND_EXEC} ${FILES_ADD})
+
+target_include_directories(${SECOND_EXEC} PRIVATE "Include/")

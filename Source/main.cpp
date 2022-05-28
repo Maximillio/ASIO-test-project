@@ -10,6 +10,7 @@
 
 #include <iostream>
 #include <string>
+#include <array>
 #include <ASIO/asio.hpp>
 #include <functional>
 
@@ -41,30 +42,60 @@ void print(const asio::error_code& e, asio::steady_timer& timer, int& count)
     }
 }
 
-void print_2(const asio::error_code& e)
-{
-    std::cout << "Another Hello, world!" << std::endl;
-    std::cout << "The error code is:" << e << std::endl;
-}
-
-int main(int argc, char* argv[])
+void timerExample()
 {
     asio::io_context io;
     int count {};
 
     asio::steady_timer t(io, asio::chrono::seconds(5));
-    asio::steady_timer ti(io, asio::chrono::seconds(3));
 
     functor func;
     func.count = &count;
     func.timer = &t;
 
     t.async_wait(func);
-    ti.async_wait(&print_2);
 
     io.run();
 
     std::cout << "Hello, after world!" << std::endl;
+}
+
+int main(int argc, char* argv[])
+{
+    using asio::ip::tcp;
+
+    try
+    {
+        asio::io_context io;
+        tcp::resolver resolver {io};
+
+        tcp::resolver::results_type endpoints =
+              resolver.resolve("localhost", "daytime");
+
+        tcp::socket socket(io);
+        asio::connect(socket, endpoints);
+
+        while (true)
+        {
+            std::array<char, 128> buf;
+            asio::error_code error;
+
+            size_t len = socket.read_some(asio::buffer(buf), error);
+            if (error == asio::error::eof)
+                break; // Connection closed cleanly by peer.
+            /*else if (error)
+                throw asio::system_error(error); // Some other error.*/
+
+            std::cout.write(buf.data(), len);
+        }
+        io.run();
+
+        std::cout << "Hello, after world!" << std::endl;
+    }
+    catch (const std::exception& e)
+    {
+        std::cout<< e.what() <<std::endl;
+    }
 
     return 0;
 }
